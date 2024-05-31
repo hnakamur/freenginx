@@ -627,6 +627,8 @@ ngx_http_file_cache_read(ngx_http_request_t *r, ngx_http_cache_t *c)
     c->body_start = h->body_start;
     c->etag.len = h->etag_len;
     c->etag.data = h->etag;
+    c->response_time = h->response_time;
+    c->corrected_initial_age = h->corrected_initial_age;
 
     r->cached = 1;
 
@@ -1330,6 +1332,8 @@ ngx_http_file_cache_set_header(ngx_http_request_t *r, u_char *buf)
     h->valid_msec = (u_short) c->valid_msec;
     h->header_start = (u_short) c->header_start;
     h->body_start = (u_short) c->body_start;
+    h->response_time = c->response_time;
+    h->corrected_initial_age = c->corrected_initial_age;
 
     if (c->etag.len <= NGX_HTTP_CACHE_ETAG_LEN) {
         h->etag_len = (u_char) c->etag.len;
@@ -1594,6 +1598,8 @@ ngx_http_file_cache_update_header(ngx_http_request_t *r)
     h.valid_msec = (u_short) c->valid_msec;
     h.header_start = (u_short) c->header_start;
     h.body_start = (u_short) c->body_start;
+    h.response_time = c->response_time;
+    h.corrected_initial_age = c->corrected_initial_age;
 
     if (c->etag.len <= NGX_HTTP_CACHE_ETAG_LEN) {
         h.etag_len = (u_char) c->etag.len;
