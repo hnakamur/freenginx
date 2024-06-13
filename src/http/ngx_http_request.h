@@ -291,6 +291,7 @@ typedef struct {
     off_t                             content_offset;
     time_t                            date_time;
     time_t                            last_modified_time;
+    time_t                            age_n;
 } ngx_http_headers_out_t;
 
 
