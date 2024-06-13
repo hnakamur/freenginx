@@ -398,6 +398,7 @@ ngx_int_t ngx_http_v2_table_size(ngx_http_v2_connection_t *h2c, size_t size);
 #define NGX_HTTP_V2_STATUS_404_INDEX      13
 #define NGX_HTTP_V2_STATUS_500_INDEX      14
 
+#define NGX_HTTP_V2_AGE_INDEX             21
 #define NGX_HTTP_V2_CONTENT_LENGTH_INDEX  28
 #define NGX_HTTP_V2_CONTENT_TYPE_INDEX    31
 #define NGX_HTTP_V2_DATE_INDEX            33
