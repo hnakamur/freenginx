@@ -287,14 +287,17 @@ typedef struct {
 
     ngx_table_elt_t                 *cache_control;
     ngx_table_elt_t                 *set_cookie;
+    ngx_table_elt_t                 *age;
 
     off_t                            content_length_n;
     time_t                           last_modified_time;
+    time_t                           age_n;
 
     unsigned                         connection_close:1;
     unsigned                         chunked:1;
     unsigned                         no_cache:1;
     unsigned                         expired:1;
+    unsigned                         relative_freshness:1;
 } ngx_http_upstream_headers_in_t;
 
 
