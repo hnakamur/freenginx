@@ -258,6 +258,10 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
         len += 1 + ngx_http_v2_literal_size("Wed, 31 Dec 1986 18:00:00 GMT");
     }
 
+    if (r->headers_out.age_n != -1) {
+        len += 1 + ngx_http_v2_integer_octets(NGX_TIME_T_LEN) + NGX_TIME_T_LEN;
+    }
+
     if (r->headers_out.location && r->headers_out.location->value.len) {
 
         if (r->headers_out.location->value.data[0] == '/'
@@ -550,6 +554,18 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
          * so it's safe here to use src and dst pointing to the same address.
          */
         pos = ngx_http_v2_write_value(pos, pos, len, tmp);
+    }
+
+    if (r->headers_out.age_n != -1) {
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, fc->log, 0,
+                       "http2 output header: \"age: %T\"",
+                       r->headers_out.age_n);
+
+        *pos++ = ngx_http_v2_inc_indexed(NGX_HTTP_V2_AGE_INDEX);
+
+        p = pos;
+        pos = ngx_sprintf(pos + 1, "%T", r->headers_out.age_n);
+        *p = NGX_HTTP_V2_ENCODE_RAW | (u_char) (pos - p - 1);
     }
 
     if (r->headers_out.location && r->headers_out.location->value.len) {
