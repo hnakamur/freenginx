@@ -581,6 +581,7 @@ ngx_http_clean_header(ngx_http_request_t *r)
 
     r->headers_out.content_length_n = -1;
     r->headers_out.last_modified_time = -1;
+    r->headers_out.age_n = -1;
 }
 
 

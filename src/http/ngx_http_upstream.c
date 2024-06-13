@@ -136,6 +136,8 @@ static ngx_int_t
     ngx_table_elt_t *h, ngx_uint_t offset);
 static ngx_int_t ngx_http_upstream_process_vary(ngx_http_request_t *r,
     ngx_table_elt_t *h, ngx_uint_t offset);
+static ngx_int_t ngx_http_upstream_process_age(ngx_http_request_t *r,
+    ngx_table_elt_t *h, ngx_uint_t offset);
 static ngx_int_t ngx_http_upstream_copy_header_line(ngx_http_request_t *r,
     ngx_table_elt_t *h, ngx_uint_t offset);
 static ngx_int_t
@@ -323,6 +325,10 @@ static ngx_http_upstream_header_t  ngx_http_upstream_headers_in[] = {
                  ngx_http_upstream_copy_header_line,
                  offsetof(ngx_http_headers_out_t, content_encoding), 0 },
 
+    { ngx_string("Age"),
+                 ngx_http_upstream_process_age, 0,
+                 ngx_http_upstream_ignore_header_line, 0, 0 },
+
     { ngx_null_string, NULL, 0, NULL, 0, 0 }
 };
 
@@ -507,6 +513,7 @@ ngx_http_upstream_create(ngx_http_request_t *r)
 
     u->headers_in.content_length_n = -1;
     u->headers_in.last_modified_time = -1;
+    u->headers_in.age_n = -1;
 
     return NGX_OK;
 }
@@ -961,6 +968,7 @@ ngx_http_upstream_cache(ngx_http_request_t *r, ngx_http_upstream_t *u)
         c->updating_sec = 0;
         c->error_sec = 0;
 
+        u->headers_in.relative_freshness = 0;
         u->buffer.start = NULL;
         u->cache_status = NGX_HTTP_CACHE_EXPIRED;
 
@@ -1057,6 +1065,7 @@ ngx_http_upstream_cache_get(ngx_http_request_t *r, ngx_http_upstream_t *u,
 static ngx_int_t
 ngx_http_upstream_cache_send(ngx_http_request_t *r, ngx_http_upstream_t *u)
 {
+    time_t             age_when_revalidated;
     ngx_int_t          rc;
     ngx_http_cache_t  *c;
 
@@ -1068,6 +1077,8 @@ ngx_http_upstream_cache_send(ngx_http_request_t *r, ngx_http_upstream_t *u)
         return ngx_http_cache_send(r);
     }
 
+    age_when_revalidated = u->headers_in.age_n;
+
     /* TODO: cache stack */
 
     u->buffer = *c->buf;
@@ -1076,6 +1087,7 @@ ngx_http_upstream_cache_send(ngx_http_request_t *r, ngx_http_upstream_t *u)
     ngx_memzero(&u->headers_in, sizeof(ngx_http_upstream_headers_in_t));
     u->headers_in.content_length_n = -1;
     u->headers_in.last_modified_time = -1;
+    u->headers_in.age_n = -1;
 
     if (ngx_list_init(&u->headers_in.headers, r->pool, 8,
                       sizeof(ngx_table_elt_t))
@@ -1094,6 +1106,10 @@ ngx_http_upstream_cache_send(ngx_http_request_t *r, ngx_http_upstream_t *u)
     rc = u->process_header(r);
 
     if (rc == NGX_OK) {
+        if (u->cache_status == NGX_HTTP_CACHE_REVALIDATED) {
+            /* use age from upstream when revalidated */
+            u->headers_in.age_n = age_when_revalidated;
+        }
 
         rc = ngx_http_upstream_process_headers(r, u);
 
@@ -2016,6 +2032,7 @@ ngx_http_upstream_reinit(ngx_http_request_t *r, ngx_http_upstream_t *u)
     ngx_memzero(&u->headers_in, sizeof(ngx_http_upstream_headers_in_t));
     u->headers_in.content_length_n = -1;
     u->headers_in.last_modified_time = -1;
+    u->headers_in.age_n = -1;
 
     if (ngx_list_init(&u->headers_in.headers, r->pool, 8,
                       sizeof(ngx_table_elt_t))
@@ -2977,6 +2994,42 @@ ngx_http_upstream_process_headers(ngx_http_request_t *r, ngx_http_upstream_t *u)
     r->headers_out.status_line = u->headers_in.status_line;
 
     r->headers_out.content_length_n = u->headers_in.content_length_n;
+    r->headers_out.age_n = u->headers_in.age_n;
+
+#if (NGX_HTTP_CACHE)
+    if (r->cache) {
+        ngx_http_cache_t  *c;
+
+        c = r->cache;
+
+        if (u->cache_status == NGX_HTTP_CACHE_HIT
+            || u->cache_status == NGX_HTTP_CACHE_STALE)
+        {
+            time_t  resident_time, age_value;
+
+            /*
+             * Update age response header.
+             * https://www.rfc-editor.org/rfc/rfc9111.html#name-calculating-age
+             *
+             * resident_time = now - response_time;
+             * current_age = corrected_initial_age + resident_time;
+             */
+            age_value = u->headers_in.age_n != -1 ? u->headers_in.age_n : 0;
+            resident_time = ngx_time() - c->date;
+            r->headers_out.age_n = age_value + resident_time;
+
+        } else if (u->cache_status == NGX_HTTP_CACHE_MISS
+                   || u->cache_status == NGX_HTTP_CACHE_REVALIDATED)
+        {
+            if (u->headers_in.relative_freshness) {
+                time_t  age_value;
+                /* we treat non existent age header as age: 0 */
+                age_value = u->headers_in.age_n != -1 ? u->headers_in.age_n : 0;
+                c->valid_sec -= age_value;
+            }
+        }
+    }
+#endif
 
     r->disable_not_modified = !u->cacheable;
 
@@ -4945,6 +4998,7 @@ ngx_http_upstream_process_cache_control(ngx_http_request_t *r,
         }
 
         r->cache->valid_sec = ngx_time() + n;
+        u->headers_in.relative_freshness = 1;
         u->headers_in.expired = 0;
     }
 
@@ -5047,7 +5101,18 @@ ngx_http_upstream_process_expires(ngx_http_request_t *r, ngx_table_elt_t *h,
         return NGX_OK;
     }
 
-    r->cache->valid_sec = expires;
+    /*
+     * https://www.rfc-editor.org/rfc/rfc9111#name-expires
+     *
+     * If a response includes a Cache-Control header field with the max-age
+     * directive (Section 5.2.2.1), a recipient MUST ignore the Expires
+     * header field. Likewise, if a response includes the s-maxage directive
+     * (Section 5.2.2.10), a shared cache recipient MUST ignore the Expires
+     * header field.
+     */
+    if (!u->headers_in.relative_freshness) {
+        r->cache->valid_sec = expires;
+    }
     }
 #endif
 
@@ -5119,7 +5184,8 @@ ngx_http_upstream_process_accel_expires(ngx_http_request_t *r,
     n = ngx_atoi(p, len);
 
     if (n != NGX_ERROR) {
-        r->cache->valid_sec = n;
+        /* X-Accel-Expires has higher precedence over Cache-Control. */
+        u->headers_in.relative_freshness = 0;
         u->headers_in.no_cache = 0;
         u->headers_in.expired = 0;
     }
@@ -5367,6 +5433,38 @@ ngx_http_upstream_process_vary(ngx_http_request_t *r,
     r->cache->vary = vary;
     }
 #endif
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_http_upstream_process_age(ngx_http_request_t *r,
+    ngx_table_elt_t *h, ngx_uint_t offset)
+{
+    ngx_http_upstream_t  *u;
+
+    u = r->upstream;
+
+    if (u->headers_in.age) {
+        ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                      "ignore duplicate age header from upstream: \"%V: %V\", "
+                      "previous value: \"%V: %V\"",
+                      &h->key, &h->value,
+                      &u->headers_in.age->key,
+                      &u->headers_in.age->value);
+        return NGX_OK;
+    }
+
+    h->next = NULL;
+    u->headers_in.age = h;
+    u->headers_in.age_n = ngx_atotm(h->value.data, h->value.len);
+
+    if (u->headers_in.age_n == NGX_ERROR) {
+        ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                      "ignore invalid \"Age\" header from upstream: "
+                      "\"%V: %V\"", &h->key, &h->value);
+    }
 
     return NGX_OK;
 }
