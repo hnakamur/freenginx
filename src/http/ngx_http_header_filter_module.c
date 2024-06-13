@@ -322,6 +322,10 @@ ngx_http_header_filter(ngx_http_request_t *r)
         len += sizeof("Last-Modified: Mon, 28 Sep 1970 06:00:00 GMT" CRLF) - 1;
     }
 
+    if (r->headers_out.age_n != -1) {
+        len += sizeof("Age: ") - 1 + NGX_OFF_T_LEN + 2;
+    }
+
     c = r->connection;
 
     if (r->headers_out.location
@@ -516,6 +520,10 @@ ngx_http_header_filter(ngx_http_request_t *r)
         b->last = ngx_http_time(b->last, r->headers_out.last_modified_time);
 
         *b->last++ = CR; *b->last++ = LF;
+    }
+
+    if (r->headers_out.age_n != -1) {
+        b->last = ngx_sprintf(b->last, "Age: %O" CRLF, r->headers_out.age_n);
     }
 
     if (host.data) {

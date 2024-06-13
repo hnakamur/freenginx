@@ -13,6 +13,7 @@
 /* static table indices */
 #define NGX_HTTP_V3_HEADER_AUTHORITY                 0
 #define NGX_HTTP_V3_HEADER_PATH_ROOT                 1
+#define NGX_HTTP_V3_HEADER_AGE_ZERO                  2
 #define NGX_HTTP_V3_HEADER_CONTENT_LENGTH_ZERO       4
 #define NGX_HTTP_V3_HEADER_DATE                      6
 #define NGX_HTTP_V3_HEADER_LAST_MODIFIED             10
@@ -211,6 +212,15 @@ ngx_http_v3_header_filter(ngx_http_request_t *r)
         len += ngx_http_v3_encode_field_lri(NULL, 0,
                                   NGX_HTTP_V3_HEADER_LAST_MODIFIED, NULL,
                                   sizeof("Mon, 28 Sep 1970 06:00:00 GMT") - 1);
+    }
+
+    if (r->headers_out.age_n > 0) {
+        len += ngx_http_v3_encode_field_lri(NULL, 0,
+                                            NGX_HTTP_V3_HEADER_AGE_ZERO,
+                                            NULL, NGX_OFF_T_LEN);
+    } else if (r->headers_out.age_n == 0) {
+        len += ngx_http_v3_encode_field_ri(NULL, 0,
+                                           NGX_HTTP_V3_HEADER_AGE_ZERO);
     }
 
     if (r->headers_out.location && r->headers_out.location->value.len) {
@@ -450,6 +460,27 @@ ngx_http_v3_header_filter(ngx_http_request_t *r)
         b->last = (u_char *) ngx_http_v3_encode_field_lri(b->last, 0,
                                               NGX_HTTP_V3_HEADER_LAST_MODIFIED,
                                               p, n);
+    }
+
+    if (r->headers_out.age_n != -1) {
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                       "http3 output header: \"age: %O\"",
+                       r->headers_out.age_n);
+
+        if (r->headers_out.age_n > 0) {
+            p = ngx_sprintf(b->last, "%O", r->headers_out.age_n);
+            n = p - b->last;
+
+            b->last = (u_char *) ngx_http_v3_encode_field_lri(b->last, 0,
+                                                   NGX_HTTP_V3_HEADER_AGE_ZERO,
+                                                   NULL, n);
+
+            b->last = ngx_sprintf(b->last, "%O", r->headers_out.age_n);
+
+        } else {
+            b->last = (u_char *) ngx_http_v3_encode_field_ri(b->last, 0,
+                                                  NGX_HTTP_V3_HEADER_AGE_ZERO);
+        }
     }
 
     if (r->headers_out.location && r->headers_out.location->value.len) {

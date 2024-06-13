@@ -971,6 +971,8 @@ renew:
     fcn->uniq = 0;
     fcn->body_start = 0;
     fcn->fs_size = 0;
+    fcn->response_time = 0;
+    fcn->corrected_initial_age = 0;
 
 done:
 
@@ -980,6 +982,8 @@ done:
 
     c->uniq = fcn->uniq;
     c->error = fcn->error;
+    c->response_time = fcn->response_time;
+    c->corrected_initial_age = fcn->corrected_initial_age;
     c->node = fcn;
 
 failed:
@@ -1624,6 +1628,7 @@ done:
 ngx_int_t
 ngx_http_cache_send(ngx_http_request_t *r)
 {
+    time_t             resident_time, current_age;
     ngx_int_t          rc;
     ngx_buf_t         *b;
     ngx_chain_t        out;
@@ -1645,6 +1650,17 @@ ngx_http_cache_send(ngx_http_request_t *r)
     if (b->file == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
+
+    /*
+     * Update age response header.
+     * https://www.rfc-editor.org/rfc/rfc9111.html#name-calculating-age
+     */
+    resident_time = ngx_time() - c->response_time;
+    current_age = c->corrected_initial_age + resident_time;
+    r->headers_out.age_n = current_age;
+    ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "http file cache send, resp:%O, resident:%d, age:%d",
+                   c->response_time, resident_time, current_age);
 
     rc = ngx_http_send_header(r);
 

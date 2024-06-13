@@ -59,6 +59,8 @@ typedef struct {
     size_t                           body_start;
     off_t                            fs_size;
     ngx_msec_t                       lock_time;
+    time_t                           response_time;
+    time_t                           corrected_initial_age;
 } ngx_http_file_cache_node_t;
 
 
@@ -75,6 +77,8 @@ struct ngx_http_cache_s {
     time_t                           error_sec;
     time_t                           last_modified;
     time_t                           date;
+    time_t                           response_time;
+    time_t                           corrected_initial_age;
 
     ngx_str_t                        etag;
     ngx_str_t                        vary;

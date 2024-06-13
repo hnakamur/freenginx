@@ -646,6 +646,7 @@ ngx_http_alloc_request(ngx_connection_t *c)
     r->headers_in.keep_alive_n = -1;
     r->headers_out.content_length_n = -1;
     r->headers_out.last_modified_time = -1;
+    r->headers_out.age_n = -1;
 
     r->uri_changes = NGX_HTTP_MAX_URI_CHANGES + 1;
     r->subrequests = NGX_HTTP_MAX_SUBREQUESTS + 1;
