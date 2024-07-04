@@ -2375,6 +2375,69 @@ ngx_http_file_cache_valid(ngx_array_t *cache_valid, ngx_uint_t status)
 }
 
 
+#define SETUP_DB_SQL                                                          \
+"CREATE TABLE IF NOT EXISTS caches ("                                         \
+"  key        BLOB,"                                                          \
+"  count      INTEGER NOT NULL DEFAULT 0,"                                    \
+"  uses       INTEGER NOT NULL DEFAULT 0,"                                    \
+"  valid_msec INTEGER NOT NULL DEFAULT 0,"                                    \
+"  error      INTEGER NOT NULL DEFAULT 0,"                                    \
+"  exists_    INTEGER NOT NULL DEFAULT 0,"                                    \
+"  updating   INTEGER NOT NULL DEFAULT 0,"                                    \
+"  deleting   INTEGER NOT NULL DEFAULT 0,"                                    \
+"  purged     INTEGER NOT NULL DEFAULT 0,"                                    \
+"  uniq       INTEGER NOT NULL DEFAULT 0,"                                    \
+"  expire     INTEGER NOT NULL DEFAULT 0,"                                    \
+"  valid_sec  INTEGER NOT NULL DEFAULT 0,"                                    \
+"  body_start INTEGER NOT NULL DEFAULT 0,"                                    \
+"  fs_size    INTEGER NOT NULL DEFAULT 0,"                                    \
+"  lock_time  INTEGER NOT NULL DEFAULT 0,"                                    \
+"  ref_time   INTEGER NOT NULL,"                                              \
+"  PRIMARY KEY (key)"                                                         \
+");"                                                                          \
+""                                                                            \
+"CREATE INDEX IF NOT EXISTS caches_ref_time_idx ON caches (ref_time);"
+
+static char *
+ngx_http_file_cache_open_db(ngx_conf_t *cf, ngx_http_file_cache_t *cache)
+{
+    int    rc;
+    char  *err_msg = NULL;
+
+    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                       "ngx_http_file_cache_open_db start");
+
+    rc = sqlite3_open_v2((const char *) cache->db_path->name.data, &cache->db,
+                         SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE, NULL);
+    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                       "db=%s,%p, rc=%d", cache->db_path->name.data, cache->db, rc);
+    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, cf->log, 0,
+                   "sqlite: [PID=%d] open rc=%d", ngx_pid, rc);
+    if (rc != SQLITE_OK) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "sqlite: [PID=%d] %s",
+                           ngx_pid, sqlite3_errmsg(cache->db));
+        return NGX_CONF_ERROR;
+    }
+
+    rc = sqlite3_exec(cache->db, SETUP_DB_SQL, NULL, NULL, &err_msg);
+    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, cf->log, 0,
+                   "sqlite: [PID=%d] create schema rc=%d", ngx_pid, rc);
+    if (rc != SQLITE_OK) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "sqlite: [PID=%d] %s",
+                           ngx_pid, err_msg);
+        sqlite3_free(err_msg);
+        return NGX_CONF_ERROR;
+    }
+    sqlite3_free(err_msg);
+
+    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                       "ngx_http_file_cache_open_db exit");
+
+    return NULL;
+}
+
 char *
 ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
@@ -2392,6 +2455,9 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_array_t            *caches;
     ngx_http_file_cache_t  *cache, **ce;
 
+    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                       "ngx_http_file_cache_set_slot start");
+
     cache = ngx_pcalloc(cf->pool, sizeof(ngx_http_file_cache_t));
     if (cache == NULL) {
         return NGX_CONF_ERROR;
@@ -2399,6 +2465,11 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     cache->path = ngx_pcalloc(cf->pool, sizeof(ngx_path_t));
     if (cache->path == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    cache->db_path = ngx_pcalloc(cf->pool, sizeof(ngx_path_t));
+    if (cache->db_path == NULL) {
         return NGX_CONF_ERROR;
     }
 
@@ -2432,6 +2503,19 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     for (i = 2; i < cf->args->nelts; i++) {
+
+        if (ngx_strncmp(value[i].data, "db=", 3) == 0) {
+            cache->db_path->name.data = value[i].data + 3;
+            cache->db_path->name.len = value[i].len - 3;
+
+            if (ngx_conf_full_name(cf->cycle, &cache->db_path->name, 0)
+                != NGX_OK)
+            {
+                return NGX_CONF_ERROR;
+            }
+
+            continue;
+        }
 
         if (ngx_strncmp(value[i].data, "levels=", 7) == 0) {
 
@@ -2672,6 +2756,13 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
+    if (cache->db_path->name.len == 0) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "\"%V\" must have \"db\" parameter",
+                           &cmd->name);
+        return NGX_CONF_ERROR;
+    }
+
     cache->path->manager = ngx_http_file_cache_manager;
     cache->path->loader = ngx_http_file_cache_loader;
     cache->path->data = cache;
@@ -2709,6 +2800,10 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     cache->max_size = max_size;
     cache->min_free = min_free;
 
+    if (ngx_http_file_cache_open_db(cf, cache) != NULL) {
+        return NGX_CONF_ERROR;
+    }
+
     caches = (ngx_array_t *) (confp + cmd->offset);
 
     ce = ngx_array_push(caches);
@@ -2717,6 +2812,9 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     *ce = cache;
+    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                       "ngx_http_file_cache_set_slot db=%p, elts=%p",
+                       (*ce)->db, caches->elts);
 
     return NGX_CONF_OK;
 }
@@ -2796,4 +2894,28 @@ ngx_http_file_cache_valid_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
     }
 
     return NGX_CONF_OK;
+}
+
+
+void
+ngx_http_file_cache_close_dbs(ngx_cycle_t *cycle, ngx_array_t *caches)
+{
+    int                      rc;
+    sqlite3                 *db;
+    ngx_uint_t               i;
+    ngx_http_file_cache_t  **c;
+
+    c = caches->elts;
+    for (i = 0; i < caches->nelts; i++) {
+        db = c[i]->db;
+        rc = sqlite3_close_v2(db);
+        if (rc != SQLITE_OK) {
+            ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
+                          "sqlite: [pid=%d] close: %s",
+                          ngx_pid, sqlite3_errmsg(db));
+        }
+    }
+    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, cycle->log, 0,
+                   "sqlite: [pid=%d] closed:%d",
+                   ngx_pid, caches->nelts);
 }

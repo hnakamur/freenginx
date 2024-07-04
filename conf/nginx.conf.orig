@@ -5,8 +5,6 @@ worker_processes  1;
 #error_log  logs/error.log;
 #error_log  logs/error.log  notice;
 #error_log  logs/error.log  info;
-error_log   /tmp/nginx/error.log debug;
-# error_log   /var/log/nginx/error.log debug;
 
 #pid        logs/nginx.pid;
 
@@ -20,11 +18,11 @@ http {
     include       mime.types;
     default_type  application/octet-stream;
 
-    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
-                      '$status $body_bytes_sent "$http_referer" '
-                      '"$http_user_agent" "$http_x_forwarded_for"';
+    #log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+    #                  '$status $body_bytes_sent "$http_referer" '
+    #                  '"$http_user_agent" "$http_x_forwarded_for"';
 
-    access_log  /tmp/nginx/access.log  main;
+    #access_log  logs/access.log  main;
 
     sendfile        on;
     #tcp_nopush     on;
@@ -34,33 +32,18 @@ http {
 
     #gzip  on;
 
-    proxy_cache_path   /tmp/nginx/cache  levels=1:2 keys_zone=NAME:1m db=/tmp/nginx/cache_sqlite.db;
-
     server {
-        listen       8080;
+        listen       80;
         server_name  localhost;
 
         #charset koi8-r;
 
-        access_log   /tmp/nginx/access8080.log  main;
-
-        # error_log    /tmp/nginx/error8080.log debug;
+        #access_log  logs/host.access.log  main;
 
         location / {
-            proxy_pass             http://127.0.0.1:8080;
-            proxy_cache            NAME;
-            proxy_http_version     1.1;
-            proxy_cache_revalidate on;
-            add_header parent_date $upstream_http_date;
-            add_header child_msec $msec;
-            add_header child_cache $upstream_cache_status;
+            root   html;
+            index  index.html index.htm;
         }
-
-
-        #location / {
-        #    root   html;
-        #    index  index.html index.htm;
-        #}
 
         #error_page  404              /404.html;
 
@@ -93,16 +76,6 @@ http {
         #location ~ /\.ht {
         #    deny  all;
         #}
-    }
-
-    server {
-        listen       8081;
-        server_name  localhost;
-
-	root /var/www/html;
-
-	location / {
-	}
     }
 
 

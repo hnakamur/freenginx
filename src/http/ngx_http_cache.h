@@ -12,6 +12,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <sqlite3.h>
 
 
 #define NGX_HTTP_CACHE_MISS          1
@@ -180,6 +181,9 @@ struct ngx_http_file_cache_s {
     ngx_msec_t                       manager_sleep;
     ngx_msec_t                       manager_threshold;
 
+    ngx_path_t                      *db_path;
+    sqlite3                         *db;
+
     ngx_shm_zone_t                  *shm_zone;
 
     ngx_uint_t                       use_temp_path;
@@ -202,6 +206,8 @@ char *ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
 char *ngx_http_file_cache_valid_set_slot(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
+
+void ngx_http_file_cache_close_dbs(ngx_cycle_t *cycle, ngx_array_t *caches);
 
 
 extern ngx_str_t  ngx_http_cache_status[];

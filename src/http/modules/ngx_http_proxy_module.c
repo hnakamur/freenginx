@@ -243,6 +243,8 @@ static ngx_int_t ngx_http_proxy_set_ssl(ngx_conf_t *cf,
 #endif
 static void ngx_http_proxy_set_vars(ngx_url_t *u, ngx_http_proxy_vars_t *v);
 
+static void ngx_http_proxy_exit_process(ngx_cycle_t *cycle);
+
 
 static ngx_conf_post_t  ngx_http_proxy_lowat_post =
     { ngx_http_proxy_lowat_check };
@@ -809,7 +811,7 @@ ngx_module_t  ngx_http_proxy_module = {
     NULL,                                  /* init process */
     NULL,                                  /* init thread */
     NULL,                                  /* exit thread */
-    NULL,                                  /* exit process */
+    ngx_http_proxy_exit_process,           /* exit process */
     NULL,                                  /* exit master */
     NGX_MODULE_V1_PADDING
 };
@@ -5113,4 +5115,15 @@ ngx_http_proxy_set_vars(ngx_url_t *u, ngx_http_proxy_vars_t *v)
     }
 
     v->uri = u->uri;
+}
+
+
+static void
+ngx_http_proxy_exit_process(ngx_cycle_t *cycle)
+{
+    ngx_http_proxy_main_conf_t  *pmcf;
+
+    pmcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_proxy_module);
+
+    ngx_http_file_cache_close_dbs(cycle, &pmcf->caches);
 }
