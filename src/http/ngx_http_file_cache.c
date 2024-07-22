@@ -151,6 +151,7 @@ ngx_http_file_cache_init(ngx_shm_zone_t *shm_zone, void *data)
     cache->sh->size = 0;
     cache->sh->count = 0;
     cache->sh->watermark = (ngx_uint_t) -1;
+    cache->sh->sieve_hand = NULL;
 
     cache->bsize = ngx_fs_bsize(cache->path->name.data);
 
@@ -892,11 +893,16 @@ ngx_http_file_cache_exists(ngx_http_file_cache_t *cache, ngx_http_cache_t *c)
     }
 
     if (fcn) {
-        ngx_queue_remove(&fcn->queue);
+        if (cache->evict_algorithm == NGX_CACHE_EVICT_LRU) {
+            ngx_queue_remove(&fcn->queue);
+        }
 
         if (c->node == NULL) {
             fcn->uses++;
             fcn->count++;
+            if (cache->evict_algorithm == NGX_CACHE_EVICT_SIEVE) {
+                fcn->sieve_visited = 1;
+            }
         }
 
         if (fcn->error) {
@@ -960,6 +966,11 @@ ngx_http_file_cache_exists(ngx_http_file_cache_t *cache, ngx_http_cache_t *c)
     fcn->uses = 1;
     fcn->count = 1;
 
+    if (cache->evict_algorithm == NGX_CACHE_EVICT_SIEVE) {
+        fcn->sieve_visited = 1;
+        ngx_queue_insert_head(&cache->sh->queue, &fcn->queue);
+    }
+
 renew:
 
     rc = NGX_DECLINED;
@@ -976,7 +987,9 @@ done:
 
     fcn->expire = ngx_time() + cache->inactive;
 
-    ngx_queue_insert_head(&cache->sh->queue, &fcn->queue);
+    if (cache->evict_algorithm == NGX_CACHE_EVICT_LRU) {
+        ngx_queue_insert_head(&cache->sh->queue, &fcn->queue);
+    }
 
     c->uniq = fcn->uniq;
     c->error = fcn->error;
@@ -1871,6 +1884,9 @@ ngx_http_file_cache_expire(ngx_http_file_cache_t *cache)
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0,
                    "http file cache expire");
 
+    q = NULL;
+    fcn = NULL;
+
     path = cache->path;
     len = path->name.len + 1 + path->len + 2 * NGX_HTTP_CACHE_KEY_LEN;
 
@@ -1897,9 +1913,26 @@ ngx_http_file_cache_expire(ngx_http_file_cache_t *cache)
             break;
         }
 
-        q = ngx_queue_last(&cache->sh->queue);
+        if (cache->evict_algorithm == NGX_CACHE_EVICT_LRU) {
+            q = ngx_queue_last(&cache->sh->queue);
+            fcn = ngx_queue_data(q, ngx_http_file_cache_node_t, queue);
 
-        fcn = ngx_queue_data(q, ngx_http_file_cache_node_t, queue);
+        } else if (cache->evict_algorithm == NGX_CACHE_EVICT_SIEVE) {
+            q = cache->sh->sieve_hand;
+            if (q == NULL) {
+                q = ngx_queue_last(&cache->sh->queue);
+            }
+            for ( ;; ) {
+                fcn = ngx_queue_data(q, ngx_http_file_cache_node_t, queue);
+                if (fcn->sieve_visited) {
+                    fcn->sieve_visited = 0;
+                    q = ngx_queue_prev(q);
+                } else {
+                    break;
+                }
+            }
+            cache->sh->sieve_hand = ngx_queue_prev(cache->sh->sieve_hand);
+        }
 
         wait = fcn->expire - now;
 
@@ -2310,13 +2343,23 @@ ngx_http_file_cache_add(ngx_http_file_cache_t *cache, ngx_http_cache_t *c)
 
         cache->sh->size += c->fs_size;
 
+        if (cache->evict_algorithm == NGX_CACHE_EVICT_SIEVE) {
+            fcn->sieve_visited = 0;
+            ngx_queue_insert_head(&cache->sh->queue, &fcn->queue);
+        }
     } else {
-        ngx_queue_remove(&fcn->queue);
+        if (cache->evict_algorithm == NGX_CACHE_EVICT_LRU) {
+            ngx_queue_remove(&fcn->queue);
+        } else if (cache->evict_algorithm == NGX_CACHE_EVICT_SIEVE) {
+            fcn->sieve_visited = 1;
+        }
     }
 
     fcn->expire = ngx_time() + cache->inactive;
 
-    ngx_queue_insert_head(&cache->sh->queue, &fcn->queue);
+    if (cache->evict_algorithm == NGX_CACHE_EVICT_LRU) {
+        ngx_queue_insert_head(&cache->sh->queue, &fcn->queue);
+    }
 
     ngx_shmtx_unlock(&cache->shpool->mutex);
 
@@ -2388,7 +2431,7 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_int_t               loader_files, manager_files;
     ngx_msec_t              loader_sleep, manager_sleep, loader_threshold,
                             manager_threshold;
-    ngx_uint_t              i, n, use_temp_path;
+    ngx_uint_t              i, n, use_temp_path, evict_algorithm;
     ngx_array_t            *caches;
     ngx_http_file_cache_t  *cache, **ce;
 
@@ -2403,6 +2446,7 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     use_temp_path = 1;
+    evict_algorithm = NGX_CACHE_EVICT_LRU;
 
     inactive = 600;
 
@@ -2660,6 +2704,25 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
             continue;
         }
 
+        if (ngx_strncmp(value[i].data, "evict_algorithm=", 16) == 0) {
+
+            if (ngx_strcmp(&value[i].data[16], "lru") == 0) {
+                evict_algorithm = NGX_CACHE_EVICT_LRU;
+
+            } else if (ngx_strcmp(&value[i].data[16], "sieve") == 0) {
+                evict_algorithm = NGX_CACHE_EVICT_SIEVE;
+
+            } else {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "invalid evict_algorithm value \"%V\", "
+                                   "it must be \"lru\" or \"sieve\"",
+                                   &value[i]);
+                return NGX_CONF_ERROR;
+            }
+
+            continue;
+        }
+
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                            "invalid parameter \"%V\"", &value[i]);
         return NGX_CONF_ERROR;
@@ -2704,6 +2767,7 @@ ngx_http_file_cache_set_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     cache->shm_zone->data = cache;
 
     cache->use_temp_path = use_temp_path;
+    cache->evict_algorithm = evict_algorithm;
 
     cache->inactive = inactive;
     cache->max_size = max_size;

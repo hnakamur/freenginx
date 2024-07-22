@@ -51,7 +51,8 @@ typedef struct {
     unsigned                         updating:1;
     unsigned                         deleting:1;
     unsigned                         purged:1;
-                                     /* 10 unused bits */
+    unsigned                         sieve_visited:1;
+                                     /* 9 unused bits */
 
     ngx_file_uniq_t                  uniq;
     time_t                           expire;
@@ -153,7 +154,14 @@ typedef struct {
     off_t                            size;
     ngx_uint_t                       count;
     ngx_uint_t                       watermark;
+    ngx_queue_t                     *sieve_hand;
 } ngx_http_file_cache_sh_t;
+
+
+typedef enum {
+    NGX_CACHE_EVICT_LRU = 0,
+    NGX_CACHE_EVICT_SIEVE,
+} ngx_cache_evict_algorithm_e;
 
 
 struct ngx_http_file_cache_s {
@@ -184,6 +192,7 @@ struct ngx_http_file_cache_s {
 
     ngx_uint_t                       use_temp_path;
                                      /* unsigned use_temp_path:1 */
+    ngx_uint_t                       evict_algorithm;
 };
 
 
